@@ -57,6 +57,7 @@ final class KeyboardView: UIView {
 
     private func rebuild() {
         keys.forEach { $0.removeFromSuperview() }
+        model.cancelTouches()
         touches.removeAll()
         builtLayer = model.layer
         builtPage = model.symbolPage
@@ -74,37 +75,46 @@ final class KeyboardView: UIView {
     // MARK: 터치
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for touch in touches {
+        for touch in touches.sorted(by: { $0.timestamp < $1.timestamp }) {
             let point = touch.location(in: self)
             guard let key = key(at: point) else { continue }
             self.touches[ObjectIdentifier(touch)] = (key, point)
             key.isPressed = true
-            model.press(key.spec.action)
+            model.press(key.spec.action, touch: ObjectIdentifier(touch))
         }
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
-        for touch in touches {
-            guard let entry = self.touches[ObjectIdentifier(touch)] else { continue }
-            let point = touch.location(in: self)
-            model.drag(entry.key.spec.action, dx: point.x - entry.start.x, dy: point.y - entry.start.y)
-        }
+        for touch in touches { updateDrag(touch) }
+    }
+
+    private func updateDrag(_ touch: UITouch) {
+        let id = ObjectIdentifier(touch)
+        guard let entry = touches[id] else { return }
+        let point = touch.location(in: self)
+        model.drag(touch: id, dx: point.x - entry.start.x, dy: point.y - entry.start.y)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        finish(touches)
+        for touch in touches {
+            updateDrag(touch)
+            let id = ObjectIdentifier(touch)
+            endHighlight(id)
+            model.release(touch: id)
+        }
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        finish(touches)
+        for touch in touches {
+            let id = ObjectIdentifier(touch)
+            endHighlight(id)
+            model.cancel(touch: id)
+        }
     }
 
-    private func finish(_ touches: Set<UITouch>) {
-        for touch in touches {
-            guard let entry = self.touches.removeValue(forKey: ObjectIdentifier(touch)) else { continue }
-            entry.key.isPressed = false
-            model.release(entry.key.spec.action)
-        }
+    private func endHighlight(_ id: ObjectIdentifier) {
+        guard let entry = touches.removeValue(forKey: id) else { return }
+        entry.key.isPressed = touches.values.contains { $0.key === entry.key }
     }
 
     /// 키 칸 안이면 그 키, 틈이나 가장자리면 가장 가까운 키.

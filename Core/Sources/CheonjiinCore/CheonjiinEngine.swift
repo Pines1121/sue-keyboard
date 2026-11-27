@@ -25,11 +25,45 @@ public enum ConsonantKey: Sendable, CaseIterable {
     public var label: String { String(cycle.prefix(2)) }
 }
 
+public enum SwipeDirection: Sendable, CaseIterable {
+    case left, right, up, down
+
+    /// 처음 닿은 곳으로부터의 이동 거리(pt). UIKit 좌표에서 아래쪽이 양수다.
+    public init?(dx: Double, dy: Double) {
+        let x = abs(dx)
+        let y = abs(dy)
+        if x >= 16, x > 1.5 * y {
+            self = dx < 0 ? .left : .right
+        } else if y >= 16, y > 1.5 * x {
+            self = dy < 0 ? .up : .down
+        } else {
+            return nil
+        }
+    }
+}
+
 public enum CheonjiinInput: Sendable, Equatable {
     case consonant(ConsonantKey)
     case vowel(Stroke)
-    /// 두벌식(가로 화면): 자모 하나를 그대로. ㄱ, ㅏ, ㅃ …
+    /// 두벌식 키나 천지인 밀기로 고른 자모 하나.
     case jamo(Character)
+
+    public var hasSwipeAlternates: Bool {
+        SwipeDirection.allCases.contains { swiped($0) != nil }
+    }
+
+    /// 밀기 한 번은 완성된 자모 하나로 처리하므로 지우기도 한 번에 되돌린다.
+    public func swiped(_ direction: SwipeDirection) -> CheonjiinInput? {
+        switch (self, direction) {
+        case (.consonant(let key), .left): key.cycle.dropFirst().first.map(Self.jamo)
+        case (.consonant(let key), .right): key.cycle.dropFirst(2).first.map(Self.jamo)
+        case (.vowel(.i), .right): .jamo("ㅏ")
+        case (.vowel(.i), .left): .jamo("ㅓ")
+        case (.vowel(.eu), .up): .jamo("ㅗ")
+        case (.vowel(.eu), .down): .jamo("ㅜ")
+        default: nil
+        }
+    }
 }
 
 /// 두벌식 자판 규칙.

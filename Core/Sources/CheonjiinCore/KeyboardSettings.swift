@@ -40,11 +40,6 @@ public struct KeyboardSettings: Codable, Equatable, Sendable {
     public var portraitRowHeight = 48.0
     public var landscapeRowHeight = 34.0
 
-    /// 글자 키를 누른 채 좌우로 밀어 커서 이동(간격 키는 항상 된다).
-    public var swipeCursor = true
-    /// 커서 한 칸에 해당하는 손가락 이동 거리(pt). 작을수록 민감하다.
-    public var cursorStep = 9.0
-
     public init() {}
 
     public static let ranges = (
@@ -52,8 +47,7 @@ public struct KeyboardSettings: Codable, Equatable, Sendable {
         repeatInterval: 0.02...0.15,
         hapticStrength: 0.2...1.0,
         portraitRowHeight: 40.0...60.0,
-        landscapeRowHeight: 28.0...44.0,
-        cursorStep: 5.0...18.0
+        landscapeRowHeight: 28.0...44.0
     )
 
     /// 범위를 벗어난 값과 빈·중복 언어 목록을 바로잡는다.
@@ -68,7 +62,6 @@ public struct KeyboardSettings: Codable, Equatable, Sendable {
         s.hapticStrength = hapticStrength.clamped(to: r.hapticStrength)
         s.portraitRowHeight = portraitRowHeight.clamped(to: r.portraitRowHeight)
         s.landscapeRowHeight = landscapeRowHeight.clamped(to: r.landscapeRowHeight)
-        s.cursorStep = cursorStep.clamped(to: r.cursorStep)
         return s
     }
 
@@ -87,8 +80,6 @@ public struct KeyboardSettings: Codable, Equatable, Sendable {
         keySound = try c.decodeIfPresent(Bool.self, forKey: .keySound) ?? d.keySound
         portraitRowHeight = try c.decodeIfPresent(Double.self, forKey: .portraitRowHeight) ?? d.portraitRowHeight
         landscapeRowHeight = try c.decodeIfPresent(Double.self, forKey: .landscapeRowHeight) ?? d.landscapeRowHeight
-        swipeCursor = try c.decodeIfPresent(Bool.self, forKey: .swipeCursor) ?? d.swipeCursor
-        cursorStep = try c.decodeIfPresent(Double.self, forKey: .cursorStep) ?? d.cursorStep
     }
 
     // MARK: 저장

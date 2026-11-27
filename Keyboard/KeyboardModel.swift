@@ -34,8 +34,6 @@ final class KeyboardModel {
     private(set) var forcedDark = false { didSet { if forcedDark != oldValue { onChange?() } } }
     /// 조합 중인 글자(문장부호 순환 포함)가 있는지 — 이때 간격 키는 띄어쓰지 않고 조합만 끝낸다.
     private(set) var composing = false { didSet { if composing != oldValue { onChange?() } } }
-    /// 키를 밀어 커서를 옮기는 중 — 키 글자는 그대로 둔다(사용자 요청: 키보드가 사라지지 않게).
-    private(set) var cursorMode = false { didSet { if cursorMode != oldValue { onChange?() } } }
     /// 숫자·특수문자 화면의 쪽(0 = 1/2, 1 = 2/2).
     private(set) var symbolPage = 0 { didSet { if symbolPage != oldValue { onChange?() } } }
     /// 가로 화면이면 한글을 천지인 대신 두벌식으로, 키를 낮게.
@@ -64,16 +62,11 @@ final class KeyboardModel {
     private var hapticsAllowed = false
     private let haptic = UIImpactFeedbackGenerator(style: .light)
     private var lastShiftTap = 0.0
-    private var repeatTask: Task<Void, Never>?
-    private var globeTask: Task<Void, Never>?
+    private var holdTask: Task<Void, Never>?
     private var globeLongPressed = false
-    private var spaceSteps = 0
-    /// 길게 누르면 반복할 입력과, 그 반복을 일으킨 키.
-    private var keyRepeatTask: Task<Void, Never>?
-    private var repeatingAction: KeyAction?
-    /// 방금 누른 키의 입력을 되돌리는 방법 — 그 키에서 손가락을 밀어 커서 이동이 시작되면 쓴다
-    /// (키는 닿는 순간 입력되므로, 밀기로 바뀌면 잘못 들어간 글자를 지워야 한다).
-    private var undoLastPress: (() -> Void)?
+    private var activeTouch: (id: ObjectIdentifier, action: KeyAction)?
+    /// 밀 수 있는 키만 탭과 밀기 중 하나가 결정될 때까지 문서 입력을 미룬다.
+    private var pendingInput: CheonjiinInput?
     /// 문장부호 키로 넣은 마지막 부호의 순번. 다른 키를 누르면 끝난다.
     private var punctuationIndex: Int?
     private var lastEditTime = 0.0
@@ -82,8 +75,6 @@ final class KeyboardModel {
     /// 조합 중인 글자의 직전 두 상태 — 앱이 알려 주는 내용이 늦을 때 맞춰 보는 데 쓴다.
     private var lastComposingText = ""
     private var previousComposingText = ""
-    /// 글이 선택된 상태에서 누른 키 — 손을 뗄 때 입력하거나, 밀면 버린다.
-    private var pendingPress: KeyAction?
     private var syncTask: Task<Void, Never>?
 
     static let punctuationMarks = [".", ",", "?", "!"]
@@ -97,37 +88,39 @@ final class KeyboardModel {
 
     // MARK: 키
 
-    func press(_ action: KeyAction) {
+    func press(_ action: KeyAction, touch: ObjectIdentifier) {
+        // 겹쳐 누르면 먼저 닿은 키부터 확정한다. 먼저 뗀 손가락이 다음 키를 취소하지 않게 한다.
+        finishPendingTap()
+        cancelTouches()
+        activeTouch = (touch, action)
         feedback(Self.sound(for: action))
-        keyRepeatTask?.cancel()
-        // 글이 선택돼 있으면(사파리 주소창 전체 선택 등) 누르는 즉시 넣으면 선택한 글이 지워진다.
-        // 이때만 손을 뗄 때까지 미뤄서, 밀어 커서를 옮기면 선택을 살린다. 평소엔 즉시 입력한다.
-        if Self.startsCursorDrag(action), let selected = proxy?.selectedText, !selected.isEmpty {
-            pendingPress = action
-            return
+        if case .cheonjiin(let input) = action, input.hasSwipeAlternates {
+            pendingInput = input
+            if settings.keyRepeat { startKeyRepeat(.hangul(input)) }
+        } else {
+            perform(action, allowRepeat: true)
         }
-        pendingPress = nil
-        perform(action, allowRepeat: true)
+    }
+
+    private func finishPendingTap() {
+        guard let input = pendingInput else { return }
+        pendingInput = nil
+        perform(.cheonjiin(input), allowRepeat: false)
     }
 
     private func perform(_ action: KeyAction, allowRepeat: Bool) {
         var repeatPayload: RepeatPayload?
-        syncTask?.cancel()
-        reconcileWithDocument()
-        lastEditTime = now
+        prepareDocumentEdit()
         if action != .punctuation, action != .space, punctuationIndex != nil {
             punctuationIndex = nil
             syncComposing()
         }
-        undoLastPress = nil
         switch action {
         case .cheonjiin(let input):
-            rememberEngineForUndo()
             apply(engine.type(input, at: now))
             repeatPayload = .hangul(input)
         case .jamo(let c):
             let jamo = shift == .off ? c : Dubeolsik.shifted(c)
-            rememberEngineForUndo()
             apply(engine.type(.jamo(jamo), at: now))
             if shift == .on { shift = .off }
             repeatPayload = .hangul(.jamo(jamo))
@@ -135,7 +128,6 @@ final class KeyboardModel {
             commitComposition()
             let typed = shift == .off ? text : text.uppercased()
             proxy?.insertText(typed)
-            undoLastPress = { [weak self] in self?.proxy?.deleteBackward() }
             if shift == .on { shift = .off }
             autoShift()
             repeatPayload = .text(typed)
@@ -145,27 +137,17 @@ final class KeyboardModel {
         case .space:
             // 누르는 순간 처리한다. 떼는 순간에 하면 빠른 연타에서 간격을 떼기 전에 다음 자음이
             // 먼저 들어가 앞 글자에 붙어 버린다("안" 간격 ㄴ → "알").
-            spaceSteps = 0
             // 천지인에서는 조합 중인 간격이 조합만 끝낸다. 두벌식은 언제나 띄어쓴다.
             if !isDubeolsik, punctuationIndex != nil || engine.isComposing {
                 commitComposition()
             } else {
                 commitComposition()
                 proxy?.insertText(" ")
-                undoLastPress = { [weak self] in self?.proxy?.deleteBackward() }
                 if !layer.isLetters { setLayer(letterLayer) }
                 autoShift()
             }
         case .punctuation:
             let marks = Self.punctuationMarks
-            let previous = punctuationIndex
-            undoLastPress = { [weak self] in
-                guard let self else { return }
-                self.proxy?.deleteBackward()
-                if let previous { self.proxy?.insertText(marks[previous]) }
-                self.punctuationIndex = previous
-                self.syncComposing()
-            }
             if let index = punctuationIndex {
                 proxy?.deleteBackward()
                 punctuationIndex = (index + 1) % marks.count
@@ -188,7 +170,7 @@ final class KeyboardModel {
             symbolPage = 1 - symbolPage
         case .globe:
             globeLongPressed = false
-            globeTask = Task { [weak self] in
+            holdTask = Task { [weak self] in
                 try? await Task.sleep(for: .milliseconds(450))
                 guard !Task.isCancelled, let self else { return }
                 self.globeLongPressed = true
@@ -197,34 +179,14 @@ final class KeyboardModel {
             }
         }
         guard allowRepeat else { return }
-        repeatingAction = repeatPayload == nil ? nil : action
         if let repeatPayload, settings.keyRepeat { startKeyRepeat(repeatPayload) }
     }
 
-    func release(_ action: KeyAction) {
-        if action == repeatingAction {
-            keyRepeatTask?.cancel()
-            repeatingAction = nil
-        }
-        if cursorMode {
-            // 밀어서 커서를 옮긴 손가락이 떨어졌을 뿐 — 그 키의 탭 동작(언어 전환 등)은 하지 않는다.
-            cursorMode = false
-            return
-        }
-        if pendingPress == action {
-            pendingPress = nil
-            perform(action, allowRepeat: false)
-            return
-        }
-        switch action {
-        case .backspace:
-            repeatTask?.cancel()
-            repeatTask = nil
-        case .globe:
-            // 지구본 탭: 설정한 언어 순서대로 다음 언어. 언어가 하나뿐이면 iOS의 다음 키보드로.
-            // 길게: iOS의 다음 키보드(이모지 등) — 심사 규정상 다음 키보드로 넘어갈 방법.
-            globeTask?.cancel()
-            guard !globeLongPressed else { break }
+    func release(touch: ObjectIdentifier) {
+        guard let activeTouch, activeTouch.id == touch else { return }
+        finishPendingTap()
+        cancelTouches()
+        if activeTouch.action == .globe, !globeLongPressed {
             let list = settings.languages
             if list.count > 1 {
                 let index = list.firstIndex(of: language) ?? -1
@@ -233,57 +195,27 @@ final class KeyboardModel {
                 commitComposition()
                 controller?.advanceToNextInputMode()
             }
-        default:
-            break
         }
     }
 
-    /// 글자 키나 간격 키를 누른 채 좌우로 밀면 커서가 움직인다.
-    /// 빠른 타자 중 손가락이 조금 미끄러진 것과 구분하려고 글자 키는 16pt 넘게, 가로로 분명하게
-    /// 밀어야 시작한다. 시작되면 그 키로 들어간 글자는 되돌린다.
-    func drag(_ action: KeyAction, dx: CGFloat, dy: CGFloat) {
-        guard action == .space || (settings.swipeCursor && Self.startsCursorDrag(action)) else { return }
-        let cursorStep = CGFloat(settings.cursorStep)
-        if !cursorMode {
-            let threshold: CGFloat = action == .space ? cursorStep : max(16, cursorStep)
-            guard abs(dx) >= threshold, abs(dx) > abs(dy) * 1.5 else { return }
-            keyRepeatTask?.cancel()
-            repeatingAction = nil
-            if pendingPress != nil {
-                pendingPress = nil  // 아직 넣지 않았으니 되돌릴 것도 없다(선택한 글이 그대로 남는다).
-            } else {
-                undoLastPress?()
-            }
-            undoLastPress = nil
-            commitComposition()
-            spaceSteps = 0
-            cursorMode = true
-        }
-        let steps = Int(dx / cursorStep)
-        guard steps != spaceSteps else { return }
-        proxy?.adjustTextPosition(byCharacterOffset: steps - spaceSteps)
-        spaceSteps = steps
-        // 커서 이동은 진동만(칸마다 소리가 나면 시끄럽다). 세기는 다른 키와 같다.
-        if hapticsAllowed, settings.haptics { haptic.impactOccurred(intensity: settings.hapticStrength) }
+    func cancel(touch: ObjectIdentifier) {
+        if activeTouch?.id == touch { cancelTouches() }
     }
 
-    private static func startsCursorDrag(_ action: KeyAction) -> Bool {
-        switch action {
-        case .cheonjiin, .jamo, .character, .punctuation, .space: true
-        default: false
-        }
+    func cancelTouches() {
+        holdTask?.cancel()
+        holdTask = nil
+        activeTouch = nil
+        pendingInput = nil
     }
 
-    /// 한글 키 입력 직전 상태를 붙잡아 두고, 되돌릴 때 그 상태로 문서와 조합기를 함께 돌린다.
-    private func rememberEngineForUndo() {
-        let saved = engine
-        let savedText = engine.composingText
-        undoLastPress = { [weak self] in
-            guard let self else { return }
-            let edit = TextEdit.diff(from: self.engine.composingText, to: savedText)
-            self.engine = saved
-            self.apply(edit)
-        }
+    func drag(touch: ObjectIdentifier, dx: CGFloat, dy: CGFloat) {
+        guard activeTouch?.id == touch, let input = pendingInput,
+              let direction = SwipeDirection(dx: Double(dx), dy: Double(dy)),
+              let swiped = input.swiped(direction) else { return }
+        pendingInput = nil
+        holdTask?.cancel()
+        perform(.cheonjiin(swiped), allowRepeat: false)
     }
 
     // MARK: 문서와 동기화
@@ -298,6 +230,12 @@ final class KeyboardModel {
         if hapticsAllowed { haptic.prepare() }
         forcedDark = proxy?.keyboardAppearance == .dark
         autoShift()
+    }
+
+    private func prepareDocumentEdit() {
+        syncTask?.cancel()
+        reconcileWithDocument()
+        lastEditTime = now
     }
 
     /// 커서를 옮기거나 앱이 글을 바꾸면(메시지 전송 후 입력창 비우기 등) 조합을 놓는다.
@@ -324,6 +262,9 @@ final class KeyboardModel {
     /// 조합이 남아 있으면 다음 모음이 보낸 마지막 글자를 다시 불러온다("녕" 보냄 → ㅣ → "녀이").
     /// 앱이 알려 주는 내용은 우리 입력보다 한 박자 늦을 수 있어 직전 조합 상태와 맞아도 그대로 둔다.
     private func reconcileWithDocument() {
+        if let selected = proxy?.selectedText, !selected.isEmpty {
+            commitComposition()
+        }
         guard externalChange else { return }
         externalChange = false
         guard composing else { return }
@@ -391,11 +332,14 @@ final class KeyboardModel {
 
     /// 글자 키를 설정한 시간 넘게 누르고 있으면 같은 글자를 계속 넣는다(ㅋㅋㅋ, ㅠㅠㅠ, ...).
     private func startKeyRepeat(_ payload: RepeatPayload) {
-        keyRepeatTask = Task { [weak self] in
+        holdTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(self?.settings.repeatDelay ?? 0.32))
+            guard !Task.isCancelled else { return }
+            self?.finishPendingTap()
             while !Task.isCancelled {
                 guard let self else { return }
                 self.feedback(Self.keySound)
+                self.prepareDocumentEdit()
                 self.repeatOnce(payload)
                 try? await Task.sleep(for: .seconds(self.settings.repeatInterval))
             }
@@ -420,13 +364,13 @@ final class KeyboardModel {
 
     /// 길게 누르면 처음엔 한 글자씩, 1초쯤 지나면 시스템 키보드처럼 단어째 지운다.
     private func startRepeat() {
-        repeatTask?.cancel()
-        repeatTask = Task { [weak self] in
+        holdTask = Task { [weak self] in
             try? await Task.sleep(for: .seconds(self?.settings.repeatDelay ?? 0.32))
             var count = 0
             while !Task.isCancelled {
                 guard let self else { return }
                 self.feedback(Self.deleteSound)
+                self.prepareDocumentEdit()
                 if count < 14 {
                     self.deleteOnce()
                     try? await Task.sleep(for: .seconds(self.settings.repeatInterval))

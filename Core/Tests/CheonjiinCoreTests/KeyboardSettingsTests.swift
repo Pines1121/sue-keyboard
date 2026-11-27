@@ -17,7 +17,7 @@ import Testing
 }
 
 @Test func olderOrPartialJSONKeepsDefaultsForMissingFields() throws {
-    let json = #"{"languages":["english","klingon"],"haptics":false}"#
+    let json = #"{"languages":["english","klingon"],"haptics":false,"swipeCursor":false,"cursorStep":12}"#
     let s = try JSONDecoder().decode(KeyboardSettings.self, from: Data(json.utf8))
     #expect(s.languages == [.english])
     #expect(s.haptics == false)

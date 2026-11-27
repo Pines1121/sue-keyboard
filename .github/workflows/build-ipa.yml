@@ -1,0 +1,56 @@
+name: Build unsigned IPA
+
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Generate Xcode project
+        run: |
+          xcodebuild -version
+          if ! command -v xcodegen > /dev/null; then
+            brew install xcodegen
+          fi
+          xcodegen generate
+
+      - name: Build iPhone app and keyboard
+        run: |
+          xcodebuild build \
+            -project sue-keyboard.xcodeproj \
+            -scheme sue-keyboard \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/build" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Validate and package IPA
+        run: |
+          mkdir -p "$RUNNER_TEMP/package/Payload"
+          app="$RUNNER_TEMP/package/Payload/sue-keyboard.app"
+          ditto "$RUNNER_TEMP/build/Build/Products/Release-iphoneos/sue-keyboard.app" "$app"
+          keyboard="$app/PlugIns/CheonjiinKeyboard.appex"
+          for bundle in "$app" "$keyboard"; do
+            executable="$(plutil -extract CFBundleExecutable raw "$bundle/Info.plist")"
+            test -x "$bundle/$executable"
+            xcrun lipo "$bundle/$executable" -verify_arch arm64
+            test "$(plutil -extract DTPlatformName raw "$bundle/Info.plist")" = "iphoneos"
+          done
+          test "$(plutil -extract NSExtension.NSExtensionPointIdentifier raw "$keyboard/Info.plist")" = "com.apple.keyboard-service"
+          cd "$RUNNER_TEMP/package"
+          /usr/bin/zip -qry "$GITHUB_WORKSPACE/sue-keyboard-unsigned.ipa" Payload
+          unzip -tq "$GITHUB_WORKSPACE/sue-keyboard-unsigned.ipa"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sue-keyboard-unsigned
+          path: sue-keyboard-unsigned.ipa
+          if-no-files-found: error

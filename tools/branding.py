@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from shutil import copyfile
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -49,12 +50,6 @@ def strokes(d: ImageDraw.ImageDraw, cx: float, cy: float, scale: float, ink=INK,
     d.ellipse([x, cy - dot_d / 2, x + dot_d, cy + dot_d / 2], fill=dot)
     x += dot_d + gap
     d.rounded_rectangle([x, cy - t / 2, x + eu_w, cy + t / 2], radius=t / 2, fill=ink)
-
-
-def make_icon() -> Image.Image:
-    img = canvas(1024, 1024)
-    strokes(ImageDraw.Draw(img), 512 * SS, 512 * SS, 1.0)
-    return finish(img)
 
 
 # MARK: 키보드 그림
@@ -227,9 +222,7 @@ def main():
     shots = OUT / "screenshots"
     shots.mkdir(exist_ok=True)
 
-    icon = make_icon()
-    icon.save(OUT / "icon-1024.png")
-    icon.save(ROOT / "App/Assets.xcassets/AppIcon.appiconset/icon.png")
+    copyfile(ROOT / "App/Assets.xcassets/AppIcon.appiconset/icon.png", OUT / "icon-1024.png")
 
     shot("가장 가벼운\n천지인 키보드", "ㅣ ㆍ ㅡ 세 획이면 충분해요", "안녕하세요").save(shots / "01-hero.png")
     shot("없는 게\n자랑이에요", "가볍게, 조용하게, 입력만 해요", None, extra=promise_list).save(shots / "02-nothing.png")

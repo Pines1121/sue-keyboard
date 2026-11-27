@@ -110,6 +110,83 @@ func words(keys: String, expected: String) {
     #expect(typed(keys) == expected)
 }
 
+@Test(arguments: [
+    (0, 0, nil), (15.9, 0, nil), (0, -15.9, nil),
+    (16, 0, .right), (-16, 0, .left), (0, 16, .down), (0, -16, .up),
+    (30, 20, nil), (-20, -30, nil), (40, -40, nil),
+    (-30, 19, .left), (-19, 30, .down),
+] as [(Double, Double, SwipeDirection?)])
+func swipeDirectionFromTouch(dx: Double, dy: Double, expected: SwipeDirection?) {
+    #expect(SwipeDirection(dx: dx, dy: dy) == expected)
+}
+
+@Test(arguments: [
+    (.consonant(.giyeok), "ㅋ", "ㄲ", nil, nil),
+    (.consonant(.nieun), "ㄹ", nil, nil, nil),
+    (.consonant(.digeut), "ㅌ", "ㄸ", nil, nil),
+    (.consonant(.bieup), "ㅍ", "ㅃ", nil, nil),
+    (.consonant(.siot), "ㅎ", "ㅆ", nil, nil),
+    (.consonant(.jieut), "ㅊ", "ㅉ", nil, nil),
+    (.consonant(.ieung), "ㅁ", nil, nil, nil),
+    (.vowel(.i), "ㅓ", "ㅏ", nil, nil),
+    (.vowel(.eu), nil, nil, "ㅗ", "ㅜ"),
+    (.vowel(.dot), nil, nil, nil, nil),
+    (.jamo("ㄱ"), nil, nil, nil, nil),
+] as [(CheonjiinInput, Character?, Character?, Character?, Character?)])
+func swipeMappings(input: CheonjiinInput, left: Character?, right: Character?, up: Character?, down: Character?) {
+    #expect(input.swiped(.left) == left.map(CheonjiinInput.jamo))
+    #expect(input.swiped(.right) == right.map(CheonjiinInput.jamo))
+    #expect(input.swiped(.up) == up.map(CheonjiinInput.jamo))
+    #expect(input.swiped(.down) == down.map(CheonjiinInput.jamo))
+    #expect(input.hasSwipeAlternates == [left, right, up, down].contains { $0 != nil })
+}
+
+@Test(arguments: [
+    (SwipeDirection.up, SwipeDirection.right, "고", "과"),
+    (.down, .left, "구", "궈"),
+])
+func swipedCompoundVowels(first: SwipeDirection, second: SwipeDirection,
+                          simple: String, compound: String) throws {
+    var t = Typist()
+    let vowel = try #require(CheonjiinInput.vowel(.eu).swiped(first))
+    let extensionVowel = try #require(CheonjiinInput.vowel(.i).swiped(second))
+    #expect(t.type("ㄱ") == "ㄱ")
+    t.apply(t.engine.type(vowel, at: t.clock))
+    #expect(t.document == simple)
+    t.apply(t.engine.type(extensionVowel, at: t.clock))
+    #expect(t.document == compound)
+    #expect(t.type("<") == simple)
+    #expect(t.type("<") == "ㄱ")
+}
+
+@Test func swipeVowelsComposeWithFinalsAndFollowingStrokes() throws {
+    var t = Typist()
+    let a = try #require(CheonjiinInput.vowel(.i).swiped(.right))
+    let eo = try #require(CheonjiinInput.vowel(.i).swiped(.left))
+    #expect(t.type("ㄱ") == "ㄱ")
+    t.apply(t.engine.type(a, at: t.clock))
+    #expect(t.document == "가")
+    #expect(t.type("ㄱ") == "각")
+    t.apply(t.engine.type(eo, at: t.clock))
+    #expect(t.document == "가거")
+    #expect(t.type("ㅣ") == "가게")
+    #expect(t.type("<") == "가거")
+    #expect(t.type("<") == "각")
+    #expect(t.type("<<") == "ㄱ")
+}
+
+@Test func swipedDoubleGiyeokCanBeInitialOrFinal() throws {
+    var t = Typist()
+    let kk = try #require(CheonjiinInput.consonant(.giyeok).swiped(.right))
+    t.apply(t.engine.type(kk, at: t.clock))
+    #expect(t.document == "ㄲ")
+    #expect(t.type("ㅣㆍ") == "까")
+    t.apply(t.engine.type(kk, at: t.clock))
+    #expect(t.document == "깎")
+    #expect(t.type("ㅣ") == "까끼")
+    #expect(t.type("<<") == "까")
+}
+
 @Test func backspaceRewindsKeystrokes() {
     var t = Typist()
     #expect(t.type("ㄱㅣㆍㄱㅣ") == "가기")

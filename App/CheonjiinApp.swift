@@ -36,11 +36,11 @@ struct ContentView: View {
                 } header: {
                     Text("켜기")
                 } footer: {
-                    Text("설정 › 천지in › 키보드에서 '천지in'을 켜세요. '전체 접근 허용'은 진동·키 소리와 아래 설정을 키보드에 전하는 데만 쓰이고, 꺼도 기본 설정으로 모든 입력이 동작합니다.")
+                    Text("설정 › 이진수키 › 키보드에서 '이진수키'를 켜세요. '전체 접근 허용'은 진동·키 소리와 아래 설정을 키보드에 전하는 데만 쓰이고, 꺼도 기본 설정으로 모든 입력이 동작합니다.")
                 }
 
                 Section("써 보기") {
-                    TextField("여기를 눌러 천지in으로 써 보세요", text: $sample, axis: .vertical)
+                    TextField("여기를 눌러 이진수키로 써 보세요", text: $sample, axis: .vertical)
                         .lineLimit(3...8)
                         .focused($focused)
                 }
@@ -85,36 +85,29 @@ struct ContentView: View {
                 }
 
                 Section {
-                    Toggle("글자 키를 밀어 커서 이동", isOn: $store.settings.swipeCursor)
-                    SliderRow(title: "감도", value: sensitivity, range: 1...10, step: 1) { "\(Int($0))" }
-                } header: {
-                    Text("커서")
-                } footer: {
-                    Text("간격 키는 언제나 좌우로 밀어 커서를 옮길 수 있습니다.")
-                }
-
-                Section {
                     Button("기본값으로 되돌리기", role: .destructive) { store.settings = KeyboardSettings() }
                 }
 
                 Section("입력 방법") {
                     tip("모음", "ㅣ ㆍ ㅡ 세 획을 이어 누릅니다. ㅣㆍ = ㅏ, ㆍㅣ = ㅓ, ㆍㅡ = ㅗ, ㅡㆍ = ㅜ")
                     tip("자음", "같은 키를 이어 누르면 ㄱ → ㅋ → ㄲ. 같은 자음을 따로 쓰려면 사이에 간격 키를 누릅니다(안녕: ㄴ, 간격, ㄴ).")
+                    tip("천지인 자음 밀기", "왼쪽으로 밀면 키에 적힌 두 번째 자음이 입력됩니다(ㄱ에서 ㅋ, ㄴ에서 ㄹ). ㄱ·ㄷ·ㅂ·ㅅ·ㅈ을 오른쪽으로 밀면 쌍자음이 입력됩니다.")
+                    tip("천지인 모음 밀기", "ㅣ 키는 왼쪽으로 밀면 ㅓ, 오른쪽으로 밀면 ㅏ가 됩니다. ㅡ 키는 위로 밀면 ㅗ, 아래로 밀면 ㅜ가 됩니다.")
                     tip("간격", "조합 중(→ 표시)이면 조합만 끝내고, 아니면 띄어씁니다.")
                     tip("지우기", "누른 순서를 거꾸로 되감습니다. 가기 → 각 → 가")
                 }
 
                 Section {
                     Link(destination: Self.repository) {
-                        Label("GitHub에서 소스 보기", systemImage: "chevron.left.forwardslash.chevron.right")
+                        Label("GitHub에서 원본 소스 보기", systemImage: "chevron.left.forwardslash.chevron.right")
                     }
                 } header: {
                     Text("오픈소스")
                 } footer: {
-                    Text("광고·추적·구독이 없고 네트워크를 쓰지 않습니다. 모든 코드는 MIT 라이선스로 공개돼 있습니다.")
+                    Text("광고·추적·구독이 없고 네트워크를 쓰지 않습니다. 원본 키보드 천지in은 MIT 라이선스로 공개돼 있습니다.")
                 }
             }
-            .navigationTitle("천지in")
+            .navigationTitle("이진수키")
         }
     }
 
@@ -129,14 +122,6 @@ struct ContentView: View {
     private var speed: Binding<Double> {
         Binding(get: { (1 / store.settings.repeatInterval).rounded() },
                 set: { store.settings.repeatInterval = 1 / $0 })
-    }
-
-    /// 감도 1~10 ↔ 커서 한 칸 거리(감도가 높을수록 짧다)
-    private var sensitivity: Binding<Double> {
-        let r = KeyboardSettings.ranges.cursorStep
-        let span = r.upperBound - r.lowerBound
-        return Binding(get: { (10 - (store.settings.cursorStep - r.lowerBound) / span * 9).rounded() },
-                       set: { store.settings.cursorStep = r.lowerBound + (10 - $0) / 9 * span })
     }
 
     private func tip(_ title: String, _ body: String) -> some View {
